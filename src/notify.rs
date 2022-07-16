@@ -9,6 +9,31 @@ use std::sync::Mutex;
 
 use crate::linked_list::{LinkedList, Node};
 
+/// Notifies a single task to wake up.
+///
+/// # Examples
+///
+/// Usage using `tokio` as an example executor:
+///
+/// ```
+/// use std::sync::Arc;
+/// use asyncsync::Notify;
+///
+/// #[tokio::main]
+/// async fn main() {
+///     let notify = Arc::new(Notify::new());
+///
+///     let clone = notify.clone();
+///     let handle = tokio::task::spawn(async move {
+///         clone.notified().await;
+///         println!("Received notification");
+///     });
+///
+///     notify.notify_one();
+///
+///     handle.await.unwrap();
+/// }
+/// ```
 #[derive(Debug)]
 pub struct Notify {
     state: AtomicUsize,
@@ -27,6 +52,7 @@ struct Waiter {
 }
 
 impl Notify {
+    /// Creates a new `Notify` without any stored notification.
     pub fn new() -> Self {
         Self {
             state: AtomicUsize::new(0),
@@ -34,6 +60,10 @@ impl Notify {
         }
     }
 
+    /// Notifies all currently waiting tasks.
+    ///
+    /// Note that `notify_all` will only wake up all currently waiting tasks and not store any
+    /// notification for future tasks. If there are no tasks waiting, `notify_all` does nothing.
     pub fn notify_all(&self) {
         self.state.store(0, Ordering::SeqCst);
         let mut waiters = self.waiters.lock().unwrap();
@@ -49,6 +79,10 @@ impl Notify {
         }
     }
 
+    /// Notified a single waiting task.
+    ///
+    /// If there are no task waiting, a notification is stored and the next waiting task will
+    /// complete immediately.
     pub fn notify_one(&self) {
         let waiters = self.waiters.lock().unwrap();
         if waiters.is_empty() {
@@ -63,6 +97,7 @@ impl Notify {
         }
     }
 
+    /// Wait for a notification.
     pub fn notified(&self) -> Notified<'_> {
         Notified {
             notify: self,
@@ -82,6 +117,7 @@ impl Drop for Notify {
     }
 }
 
+/// A future waiting for a wake-up notification. `Notified` is returned from [`Notify::notified`].
 #[derive(Debug)]
 pub struct Notified<'a> {
     notify: &'a Notify,
@@ -95,8 +131,6 @@ impl<'a> Future for Notified<'a> {
     type Output = ();
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        println!("poll");
-
         match self.state {
             State::Init => {
                 let res =
@@ -213,7 +247,6 @@ mod tests {
             let handle = notify.clone();
             let tx = tx.clone();
             tokio::task::spawn(async move {
-                println!("x");
                 handle.notified().await;
                 let _ = tx.send(()).await;
             });
