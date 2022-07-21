@@ -4,10 +4,10 @@ use core::sync::atomic::{AtomicUsize, Ordering};
 use core::task::{Context, Poll, Waker};
 use std::cell::UnsafeCell;
 use std::marker::PhantomPinned;
-use std::ptr;
+use std::ptr::NonNull;
 use std::sync::Mutex;
 
-use crate::linked_list::{LinkedList, Node};
+use crate::linked_list::{Link, LinkedList};
 
 /// Notifies a single task to wake up.
 ///
@@ -40,15 +40,7 @@ pub struct Notify {
 
     // This list is always empty when no Notified instances are alive.
     // When Notify drops, this is always empty.
-    waiters: Mutex<LinkedList<UnsafeCell<Waiter>>>,
-}
-
-#[derive(Debug)]
-struct Waiter {
-    waker: Option<Waker>,
-    notified: bool,
-
-    _pin: PhantomPinned,
+    waiters: Mutex<LinkedList<Waiter>>,
 }
 
 impl Notify {
@@ -69,7 +61,7 @@ impl Notify {
         let mut waiters = self.waiters.lock().unwrap();
 
         for waiter in waiters.iter_mut() {
-            let waiter = unsafe { &mut *waiter.get() };
+            let waiter = unsafe { waiter.get() };
 
             waiter.notified = true;
 
@@ -79,21 +71,23 @@ impl Notify {
         }
     }
 
-    /// Notified a single waiting task.
+    /// Notifies a single waiting task.
     ///
     /// If there are no task waiting, a notification is stored and the next waiting task will
     /// complete immediately.
     pub fn notify_one(&self) {
         let waiters = self.waiters.lock().unwrap();
-        if waiters.is_empty() {
-            self.state.store(1, Ordering::SeqCst);
-        } else {
-            let waiter = unsafe { &mut *waiters.front().unwrap().get() };
-            waiter.notified = true;
 
-            if let Some(waker) = &waiter.waker {
-                waker.wake_by_ref();
+        match waiters.front() {
+            Some(waiter) => {
+                let waiter = unsafe { waiter.get() };
+
+                waiter.notified = true;
+                if let Some(waker) = &waiter.waker {
+                    waker.wake_by_ref();
+                }
             }
+            None => self.state.store(1, Ordering::SeqCst),
         }
     }
 
@@ -102,7 +96,13 @@ impl Notify {
         Notified {
             notify: self,
             state: State::Init,
-            waiter: 0 as *mut _,
+            waiter: Waiter(UnsafeCell::new(WaiterInner {
+                waker: None,
+                notified: false,
+                next: None,
+                prev: None,
+                _pin: PhantomPinned,
+            })),
         }
     }
 }
@@ -117,20 +117,74 @@ impl Drop for Notify {
     }
 }
 
+unsafe impl Send for Notify {}
+unsafe impl Sync for Notify {}
+
+#[derive(Debug)]
+#[repr(transparent)]
+struct Waiter(UnsafeCell<WaiterInner>);
+
+impl Waiter {
+    unsafe fn get(&self) -> &mut WaiterInner {
+        &mut *self.0.get()
+    }
+}
+
+unsafe impl Link for Waiter {
+    fn next(&self) -> Option<NonNull<Self>> {
+        unsafe { (&*self.0.get()).next }
+    }
+
+    fn prev(&self) -> Option<NonNull<Self>> {
+        unsafe { (&*self.0.get()).prev }
+    }
+
+    fn next_mut(&mut self) -> &mut Option<NonNull<Self>> {
+        unsafe { &mut (&mut *self.0.get()).next }
+    }
+
+    fn prev_mut(&mut self) -> &mut Option<NonNull<Self>> {
+        unsafe { &mut (&mut *self.0.get()).prev }
+    }
+}
+
+#[derive(Debug)]
+struct WaiterInner {
+    waker: Option<Waker>,
+    notified: bool,
+
+    _pin: PhantomPinned,
+
+    next: Option<NonNull<Waiter>>,
+    prev: Option<NonNull<Waiter>>,
+}
+
 /// A future waiting for a wake-up notification. `Notified` is returned from [`Notify::notified`].
 #[derive(Debug)]
 pub struct Notified<'a> {
     notify: &'a Notify,
     state: State,
 
-    /// Pointer to the wait list of `self.notify`. Lock the mutex before accessing.
-    waiter: *mut Node<UnsafeCell<Waiter>>,
+    /// Pointer to the wait list of `self.notify`. Lock the mutex before accessing. Only
+    /// inside the waiterlist if state == State::Pending.
+    waiter: Waiter,
+}
+
+impl<'a> Notified<'a> {
+    /// Returns a `&mut self.state` from a `Pin<&mut Self>`.
+    #[inline]
+    fn state_mut(self: Pin<&mut Self>) -> &mut State {
+        is_unpin::<State>();
+
+        // SAFETY: State is unpin.
+        unsafe { &mut self.get_unchecked_mut().state }
+    }
 }
 
 impl<'a> Future for Notified<'a> {
     type Output = ();
 
-    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         match self.state {
             State::Init => {
                 let res =
@@ -139,45 +193,37 @@ impl<'a> Future for Notified<'a> {
                         .compare_exchange(1, 0, Ordering::SeqCst, Ordering::SeqCst);
 
                 if res.is_ok() {
-                    self.state = State::Done;
+                    *self.state_mut() = State::Done;
                     return Poll::Ready(());
                 }
 
-                // Register a new waiter.
+                // Lock waiters mutex before accessing `self.waiter`.
                 let mut waiters = self.notify.waiters.lock().unwrap();
 
-                let waiter = waiters.push_back(UnsafeCell::new(Waiter {
-                    waker: None,
-                    notified: false,
-                    _pin: PhantomPinned,
-                }));
-                self.waiter = waiter.as_ptr();
+                // SAFETY: waiterlist is locked, access to `self.writer` is exclusive.
+                unsafe {
+                    self.waiter.get().waker = Some(cx.waker().clone());
 
-                // SAFETY: waiters is locked.
-                let waiter = unsafe { &mut *(*self.waiter).get() };
-                waiter.waker = Some(cx.waker().clone());
-                drop(waiter);
+                    waiters.push_back((&self.waiter).into());
+                }
+
                 drop(waiters);
 
-                self.state = State::Pending;
+                *self.state_mut() = State::Pending;
                 Poll::Pending
             }
             State::Pending => {
                 let mut waiters = self.notify.waiters.lock().unwrap();
 
-                // SAFETY: waiters is locked.
-                let waiter = unsafe { &mut *(*self.waiter).get() };
+                let waiter = unsafe { self.waiter.get() };
 
                 if waiter.notified {
-                    drop(waiter);
-                    let waiter = unsafe { &mut *self.waiter };
-
-                    waiters.remove(waiter);
+                    // SAFETY: Waiterlist is locked, access to `self.writer` is exclusive.
                     unsafe {
-                        ptr::drop_in_place(self.waiter);
+                        waiters.remove((&self.waiter).into());
                     }
 
-                    self.state = State::Done;
+                    *self.state_mut() = State::Done;
                     Poll::Ready(())
                 } else {
                     // Update the waker if necessary.
@@ -190,7 +236,6 @@ impl<'a> Future for Notified<'a> {
                         waiter.waker = Some(cx.waker().clone());
                     }
 
-                    drop(waiter);
                     drop(waiters);
 
                     Poll::Pending
@@ -203,16 +248,13 @@ impl<'a> Future for Notified<'a> {
 
 impl<'a> Drop for Notified<'a> {
     fn drop(&mut self) {
-        // Remove existing waiter.
-        if self.state != State::Done {
+        // Remove existing waiter if necessary.
+        if self.state == State::Pending {
             let mut waiters = self.notify.waiters.lock().unwrap();
 
-            let node = unsafe { &mut *self.waiter };
-            waiters.remove(node);
-
-            // The waiter is only removed from the list and needs to be dropped manually.
+            // SAFETY: `self.waiter` is a valid pointer in the waiterlist.
             unsafe {
-                ptr::drop_in_place(self.waiter);
+                waiters.remove((&self.waiter).into());
             }
         }
     }
@@ -227,6 +269,10 @@ enum State {
     Pending,
     Done,
 }
+
+/// A utility function that asserts whether `T`is [`Unpin`].
+#[inline]
+fn is_unpin<T: Unpin>() {}
 
 #[cfg(test)]
 mod tests {
@@ -260,8 +306,27 @@ mod tests {
         }
     }
 
+    #[test]
+    fn test_notify_notified() {
+        let notify = Notify::new();
+        let _: Vec<_> = (0..5).map(|_| notify.notified()).collect();
+    }
+
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_notify_one() {
+        let notify = Arc::new(Notify::new());
+
+        let handle = notify.clone();
+        tokio::task::spawn(async move {
+            handle.notified().await;
+        });
+
+        tokio::time::sleep(Duration::new(1, 0)).await;
+        notify.notify_one();
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_notify_one_stored() {
         let notify = Arc::new(Notify::new());
         notify.notify_one();
 
