@@ -1,12 +1,12 @@
 use core::cell::UnsafeCell;
 use core::future::Future;
+use core::marker::PhantomData;
 use core::pin::Pin;
 use core::task::{Context, Poll};
-use std::marker::PhantomData;
 
 use crate::is_unpin;
 use crate::linked_list::LinkedList;
-use crate::notify::{State, Waiter};
+use crate::utils::notify::{State, Waiter};
 
 #[derive(Debug)]
 pub struct Notify {
@@ -144,6 +144,7 @@ impl<'a> Future for Notified<'a> {
 
 #[cfg(test)]
 mod tests {
+    use std::vec::Vec;
     use std::{rc::Rc, time::Duration};
 
     use tokio::{sync::mpsc, task::LocalSet};

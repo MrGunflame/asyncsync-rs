@@ -1,14 +1,13 @@
-use core::cell::UnsafeCell;
 use core::future::Future;
-use core::marker::PhantomPinned;
 use core::pin::Pin;
-use core::ptr::NonNull;
 use core::sync::atomic::{AtomicUsize, Ordering};
-use core::task::{Context, Poll, Waker};
+use core::task::{Context, Poll};
 
 use std::sync::Mutex;
 
-use crate::linked_list::{Link, LinkedList};
+use crate::is_unpin;
+use crate::linked_list::LinkedList;
+use crate::utils::notify::{State, Waiter};
 
 /// Notifies a single task to wake up.
 ///
@@ -97,13 +96,7 @@ impl Notify {
         Notified {
             notify: self,
             state: State::Init,
-            waiter: Waiter(UnsafeCell::new(WaiterInner {
-                waker: None,
-                notified: false,
-                next: None,
-                prev: None,
-                _pin: PhantomPinned,
-            })),
+            waiter: Waiter::new(),
         }
     }
 }
@@ -120,55 +113,6 @@ impl Drop for Notify {
 
 unsafe impl Send for Notify {}
 unsafe impl Sync for Notify {}
-
-#[derive(Debug)]
-#[repr(transparent)]
-pub(crate) struct Waiter(UnsafeCell<WaiterInner>);
-
-impl Waiter {
-    pub(crate) fn new() -> Self {
-        Self(UnsafeCell::new(WaiterInner {
-            waker: None,
-            notified: false,
-            _pin: PhantomPinned,
-            next: None,
-            prev: None,
-        }))
-    }
-
-    pub(crate) unsafe fn get(&self) -> &mut WaiterInner {
-        &mut *self.0.get()
-    }
-}
-
-unsafe impl Link for Waiter {
-    fn next(&self) -> Option<NonNull<Self>> {
-        unsafe { (&*self.0.get()).next }
-    }
-
-    fn prev(&self) -> Option<NonNull<Self>> {
-        unsafe { (&*self.0.get()).prev }
-    }
-
-    fn next_mut(&mut self) -> &mut Option<NonNull<Self>> {
-        unsafe { &mut (&mut *self.0.get()).next }
-    }
-
-    fn prev_mut(&mut self) -> &mut Option<NonNull<Self>> {
-        unsafe { &mut (&mut *self.0.get()).prev }
-    }
-}
-
-#[derive(Debug)]
-pub(crate) struct WaiterInner {
-    pub(crate) waker: Option<Waker>,
-    pub(crate) notified: bool,
-
-    _pin: PhantomPinned,
-
-    next: Option<NonNull<Waiter>>,
-    prev: Option<NonNull<Waiter>>,
-}
 
 /// A future waiting for a wake-up notification. `Notified` is returned from [`Notify::notified`].
 #[derive(Debug)]
@@ -274,21 +218,11 @@ impl<'a> Drop for Notified<'a> {
 unsafe impl<'a> Send for Notified<'a> {}
 unsafe impl<'a> Sync for Notified<'a> {}
 
-#[derive(Debug, PartialEq)]
-pub(crate) enum State {
-    Init,
-    Pending,
-    Done,
-}
-
-/// A utility function that asserts whether `T`is [`Unpin`].
-#[inline]
-fn is_unpin<T: Unpin>() {}
-
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
     use std::time::Duration;
+    use std::vec::Vec;
 
     use tokio::sync::mpsc;
 
