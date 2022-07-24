@@ -1,10 +1,11 @@
+use core::cell::UnsafeCell;
 use core::future::Future;
+use core::marker::PhantomPinned;
 use core::pin::Pin;
+use core::ptr::NonNull;
 use core::sync::atomic::{AtomicUsize, Ordering};
 use core::task::{Context, Poll, Waker};
-use std::cell::UnsafeCell;
-use std::marker::PhantomPinned;
-use std::ptr::NonNull;
+
 use std::sync::Mutex;
 
 use crate::linked_list::{Link, LinkedList};
@@ -122,10 +123,20 @@ unsafe impl Sync for Notify {}
 
 #[derive(Debug)]
 #[repr(transparent)]
-struct Waiter(UnsafeCell<WaiterInner>);
+pub(crate) struct Waiter(UnsafeCell<WaiterInner>);
 
 impl Waiter {
-    unsafe fn get(&self) -> &mut WaiterInner {
+    pub(crate) fn new() -> Self {
+        Self(UnsafeCell::new(WaiterInner {
+            waker: None,
+            notified: false,
+            _pin: PhantomPinned,
+            next: None,
+            prev: None,
+        }))
+    }
+
+    pub(crate) unsafe fn get(&self) -> &mut WaiterInner {
         &mut *self.0.get()
     }
 }
@@ -149,9 +160,9 @@ unsafe impl Link for Waiter {
 }
 
 #[derive(Debug)]
-struct WaiterInner {
-    waker: Option<Waker>,
-    notified: bool,
+pub(crate) struct WaiterInner {
+    pub(crate) waker: Option<Waker>,
+    pub(crate) notified: bool,
 
     _pin: PhantomPinned,
 
@@ -264,7 +275,7 @@ unsafe impl<'a> Send for Notified<'a> {}
 unsafe impl<'a> Sync for Notified<'a> {}
 
 #[derive(Debug, PartialEq)]
-enum State {
+pub(crate) enum State {
     Init,
     Pending,
     Done,
