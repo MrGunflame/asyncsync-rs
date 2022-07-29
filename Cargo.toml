@@ -20,5 +20,10 @@ parking_lot = "0.12.1"
 [dev-dependencies]
 tokio = { version = "1.19.2", features = ["rt", "rt-multi-thread", "macros", "test-util"] }
 
+[[bench]]
+name = "notify"
+path = "benches/notify.rs"
+required-features = ["std", "local"]
+
 [package.metadata.docs.rs]
 all-features = true
