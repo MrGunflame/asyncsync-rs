@@ -15,6 +15,7 @@ std = []
 local = []
 
 [dependencies]
+futures = { version = "0.3.21", default-features = false }
 parking_lot = "0.12.1"
 
 [dev-dependencies]

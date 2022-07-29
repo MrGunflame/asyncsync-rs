@@ -5,6 +5,8 @@ use core::task::{Context, Poll};
 
 use std::sync::Mutex;
 
+use futures::future::FusedFuture;
+
 use crate::is_unpin;
 use crate::linked_list::LinkedList;
 use crate::utils::notify::{State, Waiter};
@@ -212,6 +214,13 @@ impl<'a> Drop for Notified<'a> {
                 waiters.remove((&self.waiter).into());
             }
         }
+    }
+}
+
+impl<'a> FusedFuture for Notified<'a> {
+    #[inline]
+    fn is_terminated(&self) -> bool {
+        self.state == State::Done
     }
 }
 

@@ -36,7 +36,7 @@ where
 {
     /// Creates a new, empty `LinkedList`.
     #[inline]
-    pub fn new() -> Self {
+    pub const fn new() -> Self {
         Self {
             head: None,
             tail: None,

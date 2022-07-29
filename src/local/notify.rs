@@ -4,6 +4,8 @@ use core::marker::PhantomData;
 use core::pin::Pin;
 use core::task::{Context, Poll};
 
+use futures::future::FusedFuture;
+
 use crate::is_unpin;
 use crate::linked_list::LinkedList;
 use crate::utils::notify::{State, Waiter};
@@ -24,7 +26,7 @@ pub struct Notify {
 impl Notify {
     /// Creates a new `Notify` without any stored notification.
     #[inline]
-    pub fn new() -> Self {
+    pub const fn new() -> Self {
         Self {
             state: UnsafeCell::new(0),
             waiters: UnsafeCell::new(LinkedList::new()),
@@ -157,6 +159,13 @@ impl<'a> Future for Notified<'a> {
             }
             State::Done => Poll::Ready(()),
         }
+    }
+}
+
+impl<'a> FusedFuture for Notified<'a> {
+    #[inline]
+    fn is_terminated(&self) -> bool {
+        self.state == State::Done
     }
 }
 
