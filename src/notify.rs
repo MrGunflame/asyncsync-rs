@@ -63,6 +63,7 @@ impl Notify {
         self.state.store(0, Ordering::SeqCst);
         let mut waiters = self.waiters.lock().unwrap();
 
+        #[allow(clippy::significant_drop_in_scrutinee)]
         for waiter in waiters.iter_mut() {
             let waiter = unsafe { waiter.get() };
 
@@ -81,6 +82,7 @@ impl Notify {
     pub fn notify_one(&self) {
         let waiters = self.waiters.lock().unwrap();
 
+        #[allow(clippy::significant_drop_in_scrutinee)]
         match waiters.front() {
             Some(waiter) => {
                 let waiter = unsafe { waiter.get() };

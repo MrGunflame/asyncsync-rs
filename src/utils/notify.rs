@@ -56,7 +56,7 @@ pub struct WaiterInner {
     prev: Option<NonNull<Waiter>>,
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Eq)]
 pub enum State {
     Init,
     Pending,
