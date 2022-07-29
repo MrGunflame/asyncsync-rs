@@ -2,12 +2,13 @@ use core::cell::UnsafeCell;
 use core::future::Future;
 use core::marker::PhantomData;
 use core::pin::Pin;
+use core::ptr;
 use core::task::{Context, Poll};
 
 use futures::future::FusedFuture;
 
-use crate::is_unpin;
 use crate::linked_list::LinkedList;
+use crate::utils::is_unpin;
 use crate::utils::notify::{State, Waiter};
 
 /// Notifies a single task to wake up.
@@ -39,18 +40,24 @@ impl Notify {
     /// Note that `notify_all` will only wake up all currently waiting tasks and not store any
     /// notification for future tasks. If there are no tasks waiting, `notify_all` does nothing.
     pub fn notify_all(&self) {
+        // Remove any remaning notifications.
+        // SAFETY: No other threads have access to this field.
+        // usize doesn't require dropping, overwrite it.
         unsafe {
-            *(&mut *self.state.get()) = 0;
-            let waiters = &mut *self.waiters.get();
+            ptr::write(self.state.get(), 0);
+        }
 
-            for waiter in waiters.iter_mut() {
-                let waiter = waiter.get();
+        // SAFETY: No other threads have access to this field.
+        let waiters = unsafe { &mut *self.waiters.get() };
 
-                waiter.notified = true;
+        for waiter in waiters.iter_mut() {
+            // SAFETY: No other threads have access to this field.
+            let waiter = unsafe { waiter.get() };
 
-                if let Some(waker) = &waiter.waker {
-                    waker.wake_by_ref();
-                }
+            // Set the notification and wake the waker.
+            waiter.notified = true;
+            if let Some(waker) = &waiter.waker {
+                waker.wake_by_ref();
             }
         }
     }
@@ -60,28 +67,43 @@ impl Notify {
     /// If there are not task waiting, a notification is stored and the next waiting task will
     /// complete immediately.
     pub fn notify_one(&self) {
+        // SAFETY: No other threads have access to this field.
         let waiters = unsafe { &mut *self.waiters.get() };
 
+        // Notify the first waiter in the list. If the list is empty
+        // store a notification instead.
         match waiters.front() {
             Some(waiter) => {
+                // SAFETY: No other threads have access to this field.
                 let waiter = unsafe { waiter.get() };
 
+                // Set the notification and wake the waker.
                 waiter.notified = true;
                 if let Some(waker) = &waiter.waker {
                     waker.wake_by_ref();
                 }
             }
-            None => unsafe { *(&mut *self.state.get()) = 1 },
+            // SAFETY: No other threads have access to this field.
+            // usize doesn't required dropping, overwrite it.
+            None => unsafe { ptr::write(self.state.get(), 1) },
         }
     }
 
     /// Wait for a notification.
+    #[inline]
     pub fn notified(&self) -> Notified<'_> {
         Notified {
             notify: self,
             state: State::Init,
             waiter: Waiter::new(),
         }
+    }
+}
+
+impl Default for Notify {
+    #[inline]
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -96,6 +118,7 @@ pub struct Notified<'a> {
 }
 
 impl<'a> Notified<'a> {
+    #[inline]
     fn state_mut(self: Pin<&mut Self>) -> &mut State {
         is_unpin::<State>();
 
@@ -110,6 +133,8 @@ impl<'a> Future for Notified<'a> {
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         match self.state {
             State::Init => {
+                // If a notification is stored, take it and return immediately.
+                // SAFETY: No other threads have access to this field.
                 let state = unsafe { &mut *self.notify.state.get() };
                 if *state == 1 {
                     *state = 0;
@@ -117,24 +142,27 @@ impl<'a> Future for Notified<'a> {
                     return Poll::Ready(());
                 }
 
-                drop(state);
+                // Register the new waiter.
+                // SAFETY: The waiter is owned any not has no references.
+                let waiter = unsafe { self.waiter.get() };
+                waiter.waker = Some(cx.waker().clone());
 
-                // Register new waiter.
+                // Push the new waiter.
+                // SAFETY: No other threads have access to this field. The pushed waiter
+                // has a shorter lifetime than the list.
                 unsafe {
-                    self.waiter.get().waker = Some(cx.waker().clone());
-
                     let waiters = &mut *self.notify.waiters.get();
-
                     waiters.push_back((&self.waiter).into());
-                    drop(waiters);
-                };
+                }
 
                 *self.state_mut() = State::Pending;
                 Poll::Pending
             }
             State::Pending => {
+                // SAFETY: No other threads have access to the waiter.
                 let waiter = unsafe { self.waiter.get() };
 
+                // Check if a notification was received.
                 if waiter.notified {
                     // Remove the waiter.
                     unsafe {
@@ -145,8 +173,9 @@ impl<'a> Future for Notified<'a> {
                     *self.state_mut() = State::Done;
                     Poll::Ready(())
                 } else {
+                    // Update the waker if necessary.
                     let update = match &waiter.waker {
-                        Some(waker) => !waker.will_wake(&cx.waker()),
+                        Some(waker) => !waker.will_wake(cx.waker()),
                         None => true,
                     };
 
@@ -158,6 +187,20 @@ impl<'a> Future for Notified<'a> {
                 }
             }
             State::Done => Poll::Ready(()),
+        }
+    }
+}
+
+impl<'a> Drop for Notified<'a> {
+    fn drop(&mut self) {
+        // Remove the waiter if necessary.
+        if self.state == State::Pending {
+            // SAFETY: No other threads have access to the waiter list.
+            unsafe {
+                let waiters = &mut *self.notify.waiters.get();
+
+                waiters.remove((&self.waiter).into());
+            }
         }
     }
 }

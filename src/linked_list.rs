@@ -241,19 +241,19 @@ mod tests {
 
     unsafe impl Link for Node {
         fn next(&self) -> Option<NonNull<Self>> {
-            unsafe { (&*self.0.get()).next }
+            unsafe { (*self.0.get()).next }
         }
 
         fn prev(&self) -> Option<NonNull<Self>> {
-            unsafe { (&*self.0.get()).prev }
+            unsafe { (*self.0.get()).prev }
         }
 
         fn next_mut(&mut self) -> &mut Option<NonNull<Self>> {
-            unsafe { &mut (&mut *self.0.get()).next }
+            unsafe { &mut (*self.0.get()).next }
         }
 
         fn prev_mut(&mut self) -> &mut Option<NonNull<Self>> {
-            unsafe { &mut (&mut *self.0.get()).prev }
+            unsafe { &mut (*self.0.get()).prev }
         }
     }
 

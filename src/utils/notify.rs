@@ -16,6 +16,12 @@ impl Waiter {
         }))
     }
 
+    /// Returns a mutable reference to the contained [`WaiterInner`].
+    ///
+    /// # Safety
+    ///
+    /// The [`Waiter`] must be accessed from multiple threads at the same time.
+    #[allow(clippy::mut_from_ref)]
     pub unsafe fn get(&self) -> &mut WaiterInner {
         &mut *self.0.get()
     }

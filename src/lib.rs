@@ -15,6 +15,3 @@ pub mod local;
 
 #[cfg(feature = "std")]
 pub use notify::{Notified, Notify};
-
-#[inline]
-pub(crate) fn is_unpin<T: Unpin>() {}

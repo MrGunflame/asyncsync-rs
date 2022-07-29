@@ -7,8 +7,8 @@ use std::sync::Mutex;
 
 use futures::future::FusedFuture;
 
-use crate::is_unpin;
 use crate::linked_list::LinkedList;
+use crate::utils::is_unpin;
 use crate::utils::notify::{State, Waiter};
 
 /// Notifies a single task to wake up.
@@ -47,6 +47,7 @@ pub struct Notify {
 
 impl Notify {
     /// Creates a new `Notify` without any stored notification.
+    #[inline]
     pub fn new() -> Self {
         Self {
             state: AtomicUsize::new(0),
@@ -103,13 +104,10 @@ impl Notify {
     }
 }
 
-impl Drop for Notify {
-    fn drop(&mut self) {
-        #[cfg(debug_assertions)]
-        {
-            let waiters = self.waiters.lock().unwrap();
-            assert!(waiters.is_empty());
-        }
+impl Default for Notify {
+    #[inline]
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -185,7 +183,7 @@ impl<'a> Future for Notified<'a> {
                 } else {
                     // Update the waker if necessary.
                     let update = match &waiter.waker {
-                        Some(waker) => !waker.will_wake(&cx.waker()),
+                        Some(waker) => !waker.will_wake(cx.waker()),
                         None => true,
                     };
 
