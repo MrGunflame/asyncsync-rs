@@ -1,7 +1,13 @@
 [package]
 name = "asyncsync"
+description = "Runtime-agnostic synchronization primitives for asynchronous Rust"
 version = "0.1.0"
 edition = "2021"
+authors = ["MrGunflame <git@robbsrv.de>"]
+repository = "https://github.com/MrGunflame/asyncsync-rs"
+documentation = "https://docs.rs/asyncsync"
+license = "MIT OR Apache-2.0"
+publish = true
 
 [features]
 default = ["std"]
@@ -13,3 +19,6 @@ parking_lot = "0.12.1"
 
 [dev-dependencies]
 tokio = { version = "1.19.2", features = ["rt", "rt-multi-thread", "macros", "test-util"] }
+
+[package.metadata.docs.rs]
+all-features = true
