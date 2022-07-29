@@ -36,7 +36,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v3
-    - run: cargo +nightly component add cargo
+    - run: rustup +nightly component add cargo
     - run: cargo +nightly bench --all-features
 
   miri:
