@@ -8,6 +8,11 @@ use crate::is_unpin;
 use crate::linked_list::LinkedList;
 use crate::utils::notify::{State, Waiter};
 
+/// Notifies a single task to wake up.
+///
+/// This is the thread-local `!Send` version of [`Notify`].
+///
+/// [`Notify`]: crate::Notify
 #[derive(Debug)]
 pub struct Notify {
     state: UnsafeCell<usize>,
@@ -17,6 +22,7 @@ pub struct Notify {
 }
 
 impl Notify {
+    /// Creates a new `Notify` without any stored notification.
     #[inline]
     pub fn new() -> Self {
         Self {
@@ -26,6 +32,10 @@ impl Notify {
         }
     }
 
+    /// Notifies all currently waiting tasks.
+    ///
+    /// Note that `notify_all` will only wake up all currently waiting tasks and not store any
+    /// notification for future tasks. If there are no tasks waiting, `notify_all` does nothing.
     pub fn notify_all(&self) {
         unsafe {
             *(&mut *self.state.get()) = 0;
@@ -43,6 +53,10 @@ impl Notify {
         }
     }
 
+    /// Notifies a single waiting task.
+    ///
+    /// If there are not task waiting, a notification is stored and the next waiting task will
+    /// complete immediately.
     pub fn notify_one(&self) {
         let waiters = unsafe { &mut *self.waiters.get() };
 
@@ -59,7 +73,8 @@ impl Notify {
         }
     }
 
-    pub fn notifed(&self) -> Notified<'_> {
+    /// Wait for a notification.
+    pub fn notified(&self) -> Notified<'_> {
         Notified {
             notify: self,
             state: State::Init,
@@ -68,6 +83,9 @@ impl Notify {
     }
 }
 
+/// A future waiting for a wake-up notification.
+///
+/// `Notified` is returned from [`Notify::notified`].
 #[derive(Debug)]
 pub struct Notified<'a> {
     notify: &'a Notify,
@@ -154,7 +172,7 @@ mod tests {
     #[test]
     fn test_notify_notified() {
         let notify = Notify::new();
-        let _: Vec<_> = (0..5).map(|_| notify.notifed()).collect();
+        let _: Vec<_> = (0..5).map(|_| notify.notified()).collect();
     }
 
     #[test]
@@ -174,7 +192,7 @@ mod tests {
             let handle = notify.clone();
             let tx = tx.clone();
             tasks.spawn_local(async move {
-                handle.notifed().await;
+                handle.notified().await;
                 let _ = tx.send(()).await;
             });
         }
@@ -205,7 +223,7 @@ mod tests {
 
         tasks.spawn_local(async move {
             tokio::time::sleep(Duration::new(1, 0)).await;
-            notify.notifed().await;
+            notify.notified().await;
         });
 
         rt.block_on(tasks);
@@ -224,7 +242,7 @@ mod tests {
 
         let handle = notify.clone();
         tasks.spawn_local(async move {
-            handle.notifed().await;
+            handle.notified().await;
         });
 
         tasks.spawn_local(async move {
