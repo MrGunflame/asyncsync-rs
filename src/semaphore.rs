@@ -82,9 +82,23 @@ impl Semaphore {
     /// semaphore.add_permits(3);
     /// assert_eq!(semaphore.avaliable_permits(), 6);
     /// ```
-    #[inline]
-    pub fn add_permits(&self, n: usize) {
+    pub fn add_permits(&self, mut n: usize) {
         self.permits.fetch_add(n, Ordering::SeqCst);
+
+        let mut waiters = self.waiters.lock().unwrap();
+        for waiter in waiters.iter_mut() {
+            let waiter = unsafe { waiter.get() };
+
+            if n < waiter.permits {
+                break;
+            }
+
+            if let Some(waker) = &waiter.waker {
+                waker.wake_by_ref();
+            }
+
+            n -= waiter.permits;
+        }
     }
 
     /// Acquire a single permit.
@@ -124,7 +138,7 @@ impl Semaphore {
     pub fn acquire_many(&self, n: usize) -> Acquire<'_> {
         Acquire {
             semaphore: self,
-            waiter: Waiter::new(),
+            waiter: Waiter::new(n),
             state: State::Init(n),
         }
     }
@@ -329,9 +343,8 @@ impl<'a> Drop for Permit<'a> {
 mod tests {
     use std::sync::Arc;
     use std::time::Duration;
-    use std::vec::Vec;
 
-    use tokio::sync::mpsc;
+    use tokio::sync::{mpsc, oneshot};
 
     use super::Semaphore;
 
@@ -357,9 +370,79 @@ mod tests {
         }
     }
 
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_semaphore_wake() {
+        let semaphore = Arc::new(Semaphore::new(0));
+
+        let (tx, rx) = oneshot::channel();
+        let handle = semaphore.clone();
+        tokio::task::spawn(async move {
+            handle.acquire().await;
+            let _ = tx.send(());
+        });
+
+        tokio::time::sleep(Duration::new(5, 0)).await;
+        semaphore.add_permits(1);
+        let _ = rx.await;
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_semaphore_wake_many() {
+        let semaphore = Arc::new(Semaphore::new(0));
+
+        let (tx, mut rx) = mpsc::channel(5);
+        for _ in 0..5 {
+            let semaphore = semaphore.clone();
+            let tx = tx.clone();
+
+            tokio::task::spawn(async move {
+                semaphore.acquire().await;
+                let _ = tx.send(()).await;
+            });
+        }
+
+        tokio::time::sleep(Duration::new(5, 0)).await;
+        semaphore.add_permits(5);
+        
+        for _ in 0..5 {
+            let _ = rx.recv().await;
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_semaphore_acquire() {
+        let semaphore = Arc::new(Semaphore::new(5));
+
+        let (tx, mut rx) = mpsc::channel(10);
+
+        for _ in 0..10 {
+            let semaphore = semaphore.clone();
+            let tx = tx.clone();
+
+            tokio::task::spawn(async move {
+                semaphore.acquire().await;
+                tokio::time::sleep(Duration::new(5, 0)).await;
+                let _ = tx.send(()).await;
+            });
+        }
+
+        for _ in 0..10 {
+            let _ = rx.recv().await;
+        }
+    }
+
     #[test]
-    fn test_semaphore_acquire() {
-        let semaphore = Semaphore::new(0);
-        let _: Vec<_> = (0..5).map(|_| semaphore.acquire()).collect();
+    fn test_semaphore_try_acquire() {
+        let semaphore = Semaphore::new(5);
+
+        assert!(semaphore.try_acquire_many(6).is_none());
+        
+        let permit = semaphore.try_acquire_many(5).unwrap();
+        assert_eq!(semaphore.avaliable_permits(), 0);
+
+        assert!(semaphore.try_acquire().is_none());
+
+        drop(permit);
+        let _permit = semaphore.try_acquire().unwrap();
     }
 }

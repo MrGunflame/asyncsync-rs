@@ -9,9 +9,10 @@ use crate::linked_list::Link;
 pub struct Waiter(UnsafeCell<WaiterInner>);
 
 impl Waiter {
-    pub fn new() -> Self {
+    pub fn new(permits: usize) -> Self {
         Self(UnsafeCell::new(WaiterInner {
             waker: None,
+            permits,
 
             _pin: PhantomPinned,
             next: None,
@@ -28,6 +29,8 @@ impl Waiter {
 #[derive(Debug)]
 pub struct WaiterInner {
     pub waker: Option<Waker>,
+    /// The number of requested permits.
+    pub permits: usize,
 
     _pin: PhantomPinned,
 
