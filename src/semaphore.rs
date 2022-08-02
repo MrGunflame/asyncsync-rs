@@ -12,6 +12,28 @@ use crate::linked_list::LinkedList;
 use crate::utils::is_unpin;
 use crate::utils::semaphore::{State, Waiter};
 
+/// A semaphore with asynchronous permit acquisation.
+///
+/// This `Semaphore` is implemented fairly, meaning that permits are returned in the order
+/// they were requested. This includes `acquire_many`. A call to `acquire_many` will block
+/// the semaphore until enough permits are avaliable for it, even if that blocks calls to
+/// `acquire`.
+///
+/// # Examples
+///
+/// ```
+/// use asyncsync::Semaphore;
+///
+/// #[tokio::main]
+/// async fn main() {
+///     let semaphore = Semaphore::new(1);
+///
+///     let permit = semaphore.acquire().await;
+///     assert_eq!(semaphore.avaliable_permits(), 0);
+///
+///     assert!(semaphore.try_acquire().is_none());
+/// }
+/// ```
 #[derive(Debug)]
 pub struct Semaphore {
     permits: AtomicUsize,
@@ -20,6 +42,7 @@ pub struct Semaphore {
 }
 
 impl Semaphore {
+    /// Creates a new `Semaphore` with the staring number of permits.
     #[inline]
     pub fn new(permits: usize) -> Self {
         Self {
@@ -28,21 +51,75 @@ impl Semaphore {
         }
     }
 
+    /// Returns the number of permits currently avaliable.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use asyncsync::semaphore::Semaphore;
+    /// #
+    /// let semaphore = Semaphore::new(3);
+    /// assert_eq!(semaphore.avaliable_permits(), 3);
+    ///
+    /// semaphore.try_acquire().unwrap().forget();
+    /// assert_eq!(semaphore.avaliable_permits(), 2);
+    /// ```
     #[inline]
     pub fn avaliable_permits(&self) -> usize {
         self.permits.load(Ordering::SeqCst)
     }
 
+    /// Adds `n` new permits to the `Semaphore`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use asyncsync::semaphore::Semaphore;
+    /// #
+    /// let semaphore = Semaphore::new(3);
+    /// assert_eq!(semaphore.avaliable_permits(), 3);
+    ///
+    /// semaphore.add_permits(3);
+    /// assert_eq!(semaphore.avaliable_permits(), 6);
+    /// ```
     #[inline]
     pub fn add_permits(&self, n: usize) {
         self.permits.fetch_add(n, Ordering::SeqCst);
     }
 
+    /// Acquire a single permit.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use asyncsync::Semaphore;
+    /// #
+    /// #[tokio::main]
+    /// async fn main() {
+    ///     let semaphore = Semaphore::new(1);
+    ///
+    ///     let permit = semaphore.acquire().await;
+    /// }
+    /// ```
     #[inline]
     pub fn acquire(&self) -> Acquire<'_> {
         self.acquire_many(1)
     }
 
+    /// Acquire multiple permits.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use asyncsync::Semaphore;
+    /// #
+    /// #[tokio::main]
+    /// async fn main() {
+    ///     let semaphore = Semaphore::new(5);
+    ///
+    ///     let permit = semaphore.acquire_many(5).await;
+    /// }
+    /// ```
     #[inline]
     pub fn acquire_many(&self, n: usize) -> Acquire<'_> {
         Acquire {
@@ -52,11 +129,37 @@ impl Semaphore {
         }
     }
 
+    /// Tries to acquire a single permit. Returns `None` if no permit is avaliable.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use asyncsync::semaphore::Semaphore;
+    /// #
+    /// let semaphore = Semaphore::new(1);
+    /// 
+    /// let permit = semaphore.try_acquire().unwrap();
+    ///
+    /// assert!(semaphore.try_acquire().is_none());
+    /// ```
     #[inline]
     pub fn try_acquire(&self) -> Option<Permit<'_>> {
         self.try_acquire_many(1)
     }
 
+    /// Tries to acquire `n` permits. Returns `None` if not enough permits are avaliable.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use asyncsync::semaphore::Semaphore;
+    /// #
+    /// let semaphore = Semaphore::new(5);
+    ///
+    /// let permit = semaphore.try_acquire_many(5).unwrap();
+    ///
+    /// assert!(semaphore.try_acquire_many(1).is_none());
+    /// ```
     #[inline]
     pub fn try_acquire_many(&self, n: usize) -> Option<Permit<'_>> {
         match self
@@ -76,6 +179,9 @@ impl Semaphore {
 unsafe impl Send for Semaphore {}
 unsafe impl Sync for Semaphore {}
 
+/// A future waiting for permits to become avaliable.
+///
+/// `Acquire` is returned by [`Semaphore::acquire`] and [`Semaphore::acquire_many`].
 #[derive(Debug)]
 pub struct Acquire<'a> {
     semaphore: &'a Semaphore,
@@ -193,6 +299,11 @@ impl<'a> FusedFuture for Acquire<'a> {
     }
 }
 
+/// An acquired permit from a [`Semaphore`].
+///
+/// The permit is returned to the owning semaphore when dropped unless `forget` is called.
+///
+/// [`forget`]: Self::forget
 #[derive(Debug)]
 pub struct Permit<'a> {
     semaphore: &'a Semaphore,
@@ -200,6 +311,8 @@ pub struct Permit<'a> {
 }
 
 impl<'a> Permit<'a> {
+    /// Drops the permit without returning it back to the owning [`Semaphore`].
+    #[inline]
     pub fn forget(self) {
         mem::forget(self);
     }

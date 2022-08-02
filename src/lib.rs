@@ -11,7 +11,7 @@ pub(crate) mod utils;
 mod notify;
 
 #[cfg(feature = "std")]
-mod semaphore;
+pub mod semaphore;
 
 #[cfg(feature = "local")]
 pub mod local;
