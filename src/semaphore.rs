@@ -12,7 +12,7 @@ use crate::linked_list::LinkedList;
 use crate::utils::is_unpin;
 use crate::utils::semaphore::{State, Waiter};
 
-/// A semaphore with asynchronous permit acquisation.
+/// A semaphore with asynchronous permit acquisition.
 ///
 /// This `Semaphore` is implemented fairly, meaning that permits are returned in the order
 /// they were requested. This includes `acquire_many`. A call to `acquire_many` will block
@@ -29,7 +29,7 @@ use crate::utils::semaphore::{State, Waiter};
 ///     let semaphore = Semaphore::new(1);
 ///
 ///     let permit = semaphore.acquire().await;
-///     assert_eq!(semaphore.avaliable_permits(), 0);
+///     assert_eq!(semaphore.available_permits(), 0);
 ///
 ///     assert!(semaphore.try_acquire().is_none());
 /// }
@@ -51,7 +51,7 @@ impl Semaphore {
         }
     }
 
-    /// Returns the number of permits currently avaliable.
+    /// Returns the number of permits currently available.
     ///
     /// # Examples
     ///
@@ -59,13 +59,13 @@ impl Semaphore {
     /// # use asyncsync::semaphore::Semaphore;
     /// #
     /// let semaphore = Semaphore::new(3);
-    /// assert_eq!(semaphore.avaliable_permits(), 3);
+    /// assert_eq!(semaphore.available_permits(), 3);
     ///
     /// semaphore.try_acquire().unwrap().forget();
-    /// assert_eq!(semaphore.avaliable_permits(), 2);
+    /// assert_eq!(semaphore.available_permits(), 2);
     /// ```
     #[inline]
-    pub fn avaliable_permits(&self) -> usize {
+    pub fn available_permits(&self) -> usize {
         self.permits.load(Ordering::SeqCst)
     }
 
@@ -77,10 +77,10 @@ impl Semaphore {
     /// # use asyncsync::semaphore::Semaphore;
     /// #
     /// let semaphore = Semaphore::new(3);
-    /// assert_eq!(semaphore.avaliable_permits(), 3);
+    /// assert_eq!(semaphore.available_permits(), 3);
     ///
     /// semaphore.add_permits(3);
-    /// assert_eq!(semaphore.avaliable_permits(), 6);
+    /// assert_eq!(semaphore.available_permits(), 6);
     /// ```
     pub fn add_permits(&self, mut n: usize) {
         self.permits.fetch_add(n, Ordering::SeqCst);
@@ -438,7 +438,7 @@ mod tests {
         assert!(semaphore.try_acquire_many(6).is_none());
         
         let permit = semaphore.try_acquire_many(5).unwrap();
-        assert_eq!(semaphore.avaliable_permits(), 0);
+        assert_eq!(semaphore.available_permits(), 0);
 
         assert!(semaphore.try_acquire().is_none());
 
