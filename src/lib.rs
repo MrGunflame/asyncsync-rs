@@ -10,8 +10,14 @@ pub(crate) mod utils;
 #[cfg(feature = "std")]
 mod notify;
 
+#[cfg(feature = "std")]
+mod semaphore;
+
 #[cfg(feature = "local")]
 pub mod local;
 
 #[cfg(feature = "std")]
 pub use notify::{Notified, Notify};
+
+#[cfg(feature = "std")]
+pub use semaphore::{Semaphore, Permit, Accquire};
