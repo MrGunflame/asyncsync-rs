@@ -1,7 +1,7 @@
-use core::task::Waker;
+use core::cell::UnsafeCell;
 use core::marker::PhantomPinned;
 use core::ptr::NonNull;
-use core::cell::UnsafeCell;
+use core::task::Waker;
 
 use crate::linked_list::Link;
 
@@ -19,6 +19,7 @@ impl Waiter {
         }))
     }
 
+    #[allow(clippy::mut_from_ref)]
     pub unsafe fn get(&self) -> &mut WaiterInner {
         &mut *self.0.get()
     }
@@ -39,19 +40,19 @@ pub struct WaiterInner {
 /// Waiter is pinned.
 unsafe impl Link for Waiter {
     fn next(&self) -> Option<NonNull<Self>> {
-    unsafe { self.get().next }
+        unsafe { self.get().next }
     }
 
     fn prev(&self) -> Option<NonNull<Self>> {
-    unsafe {self.get().prev}
+        unsafe { self.get().prev }
     }
 
     fn next_mut(&mut self) -> &mut Option<NonNull<Self>> {
-    unsafe { &mut self.get().next }
+        unsafe { &mut self.get().next }
     }
 
     fn prev_mut(&mut self) -> &mut Option<NonNull<Self>> {
-    unsafe { &mut self.get().prev }
+        unsafe { &mut self.get().prev }
     }
 }
 

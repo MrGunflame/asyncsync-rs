@@ -20,4 +20,4 @@ pub mod local;
 pub use notify::{Notified, Notify};
 
 #[cfg(feature = "std")]
-pub use semaphore::{Semaphore, Permit, Accquire};
+pub use semaphore::{Acquire, Permit, Semaphore};
