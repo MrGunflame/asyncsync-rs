@@ -219,6 +219,11 @@ impl<'a> Future for Acquire<'a> {
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         match self.state {
             State::Init(n) => {
+                let mut waiters = self.semaphore.waiters.lock().unwrap();
+
+                // Only check the permits at the start when the waitlist is empty.
+                // This is required to preserve the fairness.
+                if waiters.is_empty() {
                 // Check if enough permits exist.
                 let res = self.semaphore.permits.fetch_update(
                     Ordering::SeqCst,
@@ -232,10 +237,10 @@ impl<'a> Future for Acquire<'a> {
                         permits: n,
                     });
                 }
+                }
+
 
                 // Register new waiter
-                let mut waiters = self.semaphore.waiters.lock().unwrap();
-
                 unsafe {
                     self.waiter.get().waker = Some(cx.waker().clone());
                     waiters.push_back((&self.waiter).into());
@@ -343,6 +348,7 @@ impl<'a> Drop for Permit<'a> {
 mod tests {
     use std::sync::Arc;
     use std::time::Duration;
+    use std::vec::Vec;
 
     use tokio::sync::{mpsc, oneshot};
 
@@ -444,5 +450,36 @@ mod tests {
 
         drop(permit);
         let _permit = semaphore.try_acquire().unwrap();
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_semaphore_fairness() {
+        let semaphore = Arc::new(Semaphore::new(0));
+        let mut stack = Vec::new();
+
+        let (tx, mut rx) = mpsc::channel(6);
+
+        for i in (1..6).rev() {
+            stack.push(i);
+
+            let semaphore = semaphore.clone();
+            let tx = tx.clone();
+
+            tokio::task::spawn(async move {
+                semaphore.acquire_many(i).await;
+                let _ = tx.send(i).await;
+            });
+        }
+
+        tokio::task::spawn(async move {
+            for i in 1..6 {
+                tokio::time::sleep(Duration::new(1, 0)).await;
+                semaphore.add_permits(i);
+            }
+        });
+
+        for val in stack.into_iter() {
+            assert_eq!(val, rx.recv().await.unwrap());
+        }
     }
 }
