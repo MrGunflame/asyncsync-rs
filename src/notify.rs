@@ -3,9 +3,8 @@ use core::pin::Pin;
 use core::sync::atomic::{AtomicUsize, Ordering};
 use core::task::{Context, Poll};
 
-use std::sync::Mutex;
-
 use futures::future::FusedFuture;
+use parking_lot::Mutex;
 
 use crate::linked_list::LinkedList;
 use crate::utils::is_unpin;
@@ -48,10 +47,10 @@ pub struct Notify {
 impl Notify {
     /// Creates a new `Notify` without any stored notification.
     #[inline]
-    pub fn new() -> Self {
+    pub const fn new() -> Self {
         Self {
             state: AtomicUsize::new(0),
-            waiters: Mutex::default(),
+            waiters: Mutex::new(LinkedList::new()),
         }
     }
 
@@ -61,9 +60,8 @@ impl Notify {
     /// notification for future tasks. If there are no tasks waiting, `notify_all` does nothing.
     pub fn notify_all(&self) {
         self.state.store(0, Ordering::SeqCst);
-        let mut waiters = self.waiters.lock().unwrap();
+        let mut waiters = self.waiters.lock();
 
-        #[allow(clippy::significant_drop_in_scrutinee)]
         for waiter in waiters.iter_mut() {
             let waiter = unsafe { waiter.get() };
 
@@ -80,7 +78,7 @@ impl Notify {
     /// If there are no task waiting, a notification is stored and the next waiting task will
     /// complete immediately.
     pub fn notify_one(&self) {
-        let waiters = self.waiters.lock().unwrap();
+        let waiters = self.waiters.lock();
 
         #[allow(clippy::significant_drop_in_scrutinee)]
         match waiters.front() {
@@ -155,7 +153,7 @@ impl<'a> Future for Notified<'a> {
                 }
 
                 // Lock waiters mutex before accessing `self.waiter`.
-                let mut waiters = self.notify.waiters.lock().unwrap();
+                let mut waiters = self.notify.waiters.lock();
 
                 // SAFETY: waiterlist is locked, access to `self.writer` is exclusive.
                 unsafe {
@@ -170,7 +168,7 @@ impl<'a> Future for Notified<'a> {
                 Poll::Pending
             }
             State::Pending => {
-                let mut waiters = self.notify.waiters.lock().unwrap();
+                let mut waiters = self.notify.waiters.lock();
 
                 let waiter = unsafe { self.waiter.get() };
 
@@ -207,7 +205,7 @@ impl<'a> Drop for Notified<'a> {
     fn drop(&mut self) {
         // Remove existing waiter if necessary.
         if self.state == State::Pending {
-            let mut waiters = self.notify.waiters.lock().unwrap();
+            let mut waiters = self.notify.waiters.lock();
 
             // SAFETY: `self.waiter` is a valid pointer in the waiterlist.
             unsafe {
