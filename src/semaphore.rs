@@ -82,14 +82,15 @@ impl Semaphore {
     /// semaphore.add_permits(3);
     /// assert_eq!(semaphore.available_permits(), 6);
     /// ```
-    pub fn add_permits(&self, mut n: usize) {
-        self.permits.fetch_add(n, Ordering::SeqCst);
+    pub fn add_permits(&self, n: usize) {
+        let mut permits = self.permits.fetch_add(n, Ordering::SeqCst) + n;
 
         let mut waiters = self.waiters.lock().unwrap();
-        for waiter in waiters.iter_mut() {
+        let iter = waiters.iter_mut();
+        for waiter in iter {
             let waiter = unsafe { waiter.get() };
 
-            if n < waiter.permits {
+            if permits < waiter.permits {
                 break;
             }
 
@@ -97,7 +98,7 @@ impl Semaphore {
                 waker.wake_by_ref();
             }
 
-            n -= waiter.permits;
+            permits -= waiter.permits;
         }
     }
 
@@ -151,7 +152,7 @@ impl Semaphore {
     /// # use asyncsync::semaphore::Semaphore;
     /// #
     /// let semaphore = Semaphore::new(1);
-    /// 
+    ///
     /// let permit = semaphore.try_acquire().unwrap();
     ///
     /// assert!(semaphore.try_acquire().is_none());
@@ -224,21 +225,20 @@ impl<'a> Future for Acquire<'a> {
                 // Only check the permits at the start when the waitlist is empty.
                 // This is required to preserve the fairness.
                 if waiters.is_empty() {
-                // Check if enough permits exist.
-                let res = self.semaphore.permits.fetch_update(
-                    Ordering::SeqCst,
-                    Ordering::SeqCst,
-                    |permits| permits.checked_sub(n),
-                );
+                    // Check if enough permits exist.
+                    let res = self.semaphore.permits.fetch_update(
+                        Ordering::SeqCst,
+                        Ordering::SeqCst,
+                        |permits| permits.checked_sub(n),
+                    );
 
-                if res.is_ok() {
-                    return Poll::Ready(Permit {
-                        semaphore: self.semaphore,
-                        permits: n,
-                    });
+                    if res.is_ok() {
+                        return Poll::Ready(Permit {
+                            semaphore: self.semaphore,
+                            permits: n,
+                        });
+                    }
                 }
-                }
-
 
                 // Register new waiter
                 unsafe {
@@ -348,7 +348,6 @@ impl<'a> Drop for Permit<'a> {
 mod tests {
     use std::sync::Arc;
     use std::time::Duration;
-    use std::vec::Vec;
 
     use tokio::sync::{mpsc, oneshot};
 
@@ -409,7 +408,7 @@ mod tests {
 
         tokio::time::sleep(Duration::new(5, 0)).await;
         semaphore.add_permits(5);
-        
+
         for _ in 0..5 {
             let _ = rx.recv().await;
         }
@@ -442,7 +441,7 @@ mod tests {
         let semaphore = Semaphore::new(5);
 
         assert!(semaphore.try_acquire_many(6).is_none());
-        
+
         let permit = semaphore.try_acquire_many(5).unwrap();
         assert_eq!(semaphore.available_permits(), 0);
 
@@ -452,34 +451,22 @@ mod tests {
         let _permit = semaphore.try_acquire().unwrap();
     }
 
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn test_semaphore_fairness() {
+    #[tokio::test]
+    async fn test_semaphore_accquire_accumulate() {
         let semaphore = Arc::new(Semaphore::new(0));
-        let mut stack = Vec::new();
 
-        let (tx, mut rx) = mpsc::channel(6);
+        let (tx, rx) = oneshot::channel();
 
-        for i in (1..6).rev() {
-            stack.push(i);
-
-            let semaphore = semaphore.clone();
-            let tx = tx.clone();
-
-            tokio::task::spawn(async move {
-                semaphore.acquire_many(i).await;
-                let _ = tx.send(i).await;
-            });
-        }
-
+        let handle = semaphore.clone();
         tokio::task::spawn(async move {
-            for i in 1..6 {
-                tokio::time::sleep(Duration::new(1, 0)).await;
-                semaphore.add_permits(i);
-            }
+            handle.acquire_many(5).await;
+            let _ = tx.send(());
         });
 
-        for val in stack.into_iter() {
-            assert_eq!(val, rx.recv().await.unwrap());
+        for _ in 0..5 {
+            semaphore.add_permits(1);
         }
+
+        let _ = rx.await;
     }
 }
