@@ -4,4 +4,6 @@
 //! context.
 mod notify;
 
+pub mod channel;
+
 pub use notify::{Notified, Notify};
