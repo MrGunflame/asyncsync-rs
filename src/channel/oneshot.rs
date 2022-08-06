@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 use parking_lot::Mutex;
 
-pub use error::{RecvError, TryRecvError};
+pub use crate::errors::channel::oneshot::{RecvError, TryRecvError};
 
 /// This bit is set when the channel contains a value. Only then is it safe to
 /// read it.
@@ -286,52 +286,6 @@ impl<'a, T> Future for Closed<'a, T> {
     }
 }
 
-mod error {
-    use core::fmt::{self, Display, Formatter};
-
-    #[cfg(feature = "std")]
-    use std::error::Error;
-
-    #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
-    pub struct RecvError {
-        _priv: (),
-    }
-
-    impl RecvError {
-        #[inline]
-        pub(super) fn new() -> Self {
-            Self { _priv: () }
-        }
-    }
-
-    impl Display for RecvError {
-        fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-            write!(f, "channel closed")
-        }
-    }
-
-    #[cfg(feature = "std")]
-    impl Error for RecvError {}
-
-    #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
-    pub enum TryRecvError {
-        Empty,
-        Closed,
-    }
-
-    impl Display for TryRecvError {
-        fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-            match self {
-                Self::Empty => write!(f, "channel empty"),
-                Self::Closed => write!(f, "channel closed"),
-            }
-        }
-    }
-
-    #[cfg(feature = "std")]
-    impl Error for TryRecvError {}
-}
-
 #[cfg(test)]
 mod tests {
     use super::{channel, TryRecvError};
@@ -385,7 +339,7 @@ mod tests {
         rx.close();
         assert!(tx.is_closed());
     }
-    
+
     #[test]
     fn test_channel_try_recv() {
         let (tx, mut rx) = channel::<()>();
