@@ -13,6 +13,9 @@ mod notify;
 #[cfg(feature = "std")]
 pub mod semaphore;
 
+#[cfg(feature = "std")]
+pub mod channel;
+
 #[cfg(feature = "local")]
 pub mod local;
 
