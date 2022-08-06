@@ -1,3 +1,30 @@
+//! A one-shot channel for sending a single value between tasks.
+//!
+//! Use the [`channel`] function to create a new [`Sender`]-[`Receiver`] pair.
+//!
+//! The [`Sender`] and [`Receiver`] halves can be sent to different threads. If sharing between
+//! threads is not required, [`oneshot`] is a better option.
+//!
+//! # Examples
+//!
+//! ```
+//! use asyncsync::channel::oneshot;
+//!
+//! #[tokio::main]
+//! async fn main() {
+//!     let (tx, rx) = oneshot::channel();
+//!
+//!     tokio::task::spawn(async move {
+//!         tx.send(42).unwrap();
+//!     });
+//!
+//!     let value = rx.await.unwrap();
+//!     assert_eq!(value, 42);
+//! }
+//! ```
+//!
+//! [`oneshot`]: crate::local::channel::oneshot
+
 use core::cell::UnsafeCell;
 use core::future::Future;
 use core::mem::MaybeUninit;
@@ -17,6 +44,24 @@ const STATE_HAS_VALUE: u8 = 0b0000_0001;
 const STATE_TX_CLOSED: u8 = 0b0000_0010;
 const STATE_RX_CLOSED: u8 = 0b0000_0100;
 
+/// Creates a new one-shot channel.
+///
+/// # Examples
+///
+/// ```
+/// use asyncsync::channel::oneshot;
+///
+/// #[tokio::main]
+/// async fn main() {
+///     let (tx, rx) = oneshot::channel();
+///
+///     tokio::task::spawn(async move {
+///         tx.send(42).unwrap();
+///     });
+///
+///     assert_eq!(rx.await.unwrap(), 42);
+/// }
+/// ```
 pub fn channel<T>() -> (Sender<T>, Receiver<T>) {
     let inner = Arc::new(Inner::new());
 
@@ -29,6 +74,8 @@ pub fn channel<T>() -> (Sender<T>, Receiver<T>) {
 }
 
 /// The sending half of a oneshot channel.
+///
+/// Use [`channel`] to create a new `Sender`-[`Receiver`] pair.
 #[derive(Debug)]
 pub struct Sender<T> {
     inner: Arc<Inner<T>>,
@@ -36,17 +83,76 @@ pub struct Sender<T> {
 
 impl<T> Sender<T> {
     /// Returns `true` if the associated [`Receiver`] is closed.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use asyncsync::channel::oneshot;
+    ///
+    /// let (tx, rx) = oneshot::channel();
+    /// assert!(!tx.is_closed())
+    ///
+    /// rx.close();
+    /// assert!(tx.is_closed());
+    /// ```
+    #[inline]
     pub fn is_closed(&self) -> bool {
         self.inner.is_rx_closed()
     }
 
     /// Waits for the associated [`Receiver`] to close.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use asyncsync::channel::oneshot;
+    ///
+    /// #[tokio::main]
+    /// async fn main() {
+    ///     let (tx, rx) = oneshot::channel();
+    ///     
+    ///     tokio::task::spawn(async move {
+    ///         rx.close();
+    ///     });
+    ///
+    ///     tx.closed().await;
+    /// }
+    /// ```
+    #[inline]
     pub fn closed(&self) -> Closed<'_, T> {
         Closed { tx: self }
     }
 
     /// Tries to send a `value` to the associated [`Receiver`], returning it back if the receiver
     /// is closed.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use asyncsync::channel::oneshot;
+    ///
+    /// #[tokio::main]
+    /// async fn main() {
+    ///     let (tx, rx) = oneshot::channel();
+    ///
+    ///     tokio::task::spawn(async move {
+    ///         tx.send(42).unwrap();
+    ///     });
+    ///
+    ///     assert_eq!(rx.await.unwrap(), 42);
+    /// }
+    /// ```
+    ///
+    /// ```
+    /// use asyncsync::channel::oneshot;
+    ///
+    /// let (tx, rx) = oneshot::channel();
+    /// drop(rx);
+    ///
+    /// // The receiver was already dropped.
+    /// assert_eq!(tx.send(42).unwrap_err(), 42);
+    /// ```
+    #[inline]
     pub fn send(self, value: T) -> Result<(), T> {
         self.inner.send(value)
     }
@@ -60,6 +166,8 @@ impl<T> Drop for Sender<T> {
 }
 
 /// The receiving half of a oneshot channel.
+///
+/// Use [`channel`] to create a new [`Sender`]-`Receiver` pair.
 #[derive(Debug)]
 pub struct Receiver<T> {
     inner: Arc<Inner<T>>,
@@ -68,13 +176,55 @@ pub struct Receiver<T> {
 impl<T> Receiver<T> {
     /// Closes the channel, preventing the associated [`Sender`] from sending any more messages.
     ///
-    /// Note that all already sent messages will stay in the channel.
+    /// Note that all already sent messages will stay in the channel. Polling this `Receiver` or
+    /// calling `try_recv` will take the existing value from the channel first.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use asyncsync::channel::oneshot;
+    ///
+    /// #[tokio::main]
+    /// async fn main() {
+    ///     let (tx, rx) = oneshot::channel();
+    ///
+    ///     tokio::task::spawn(async move {
+    ///         rx.close();
+    ///     });
+    ///
+    ///     tx.closed().await;
+    /// }
+    /// ```
     #[inline]
     pub fn close(&mut self) {
         self.inner.close_rx();
     }
 
-    /// Tries the read a value from the channel.
+    /// Tries the read a value from the channel. If the channel contains a value, it is returned.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`TryRecvError::Empty`] when the channel contains no value currently.
+    /// Returns a [`TryRecvError::Closed`] when the channel contains no value and the associated
+    /// [`Sender`] was dropped. Any future calls to `try_recv` will fail.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use asyncsync::channel::oneshot::{self, TryRecvError};
+    ///
+    /// #[tokio::main]
+    /// async fn main() {
+    ///     let (tx, rx) = oneshot::channel();
+    ///
+    ///     assert_eq!(rx.try_recv().unwrap_err(), TryRecvError::Empty);
+    ///
+    ///     tx.send(123).unwrap();
+    ///     assert_eq!(rx.try_recv().unwrap(), 123);
+    ///
+    ///     assert_eq!(rx.try_recv().unwrap_err(), TryRecvError::Closed);
+    /// }
+    /// ```
     #[inline]
     pub fn try_recv(&mut self) -> Result<T, TryRecvError> {
         self.inner.try_recv()
@@ -109,6 +259,7 @@ struct Inner<T> {
 }
 
 impl<T> Inner<T> {
+    #[inline]
     const fn new() -> Self {
         Self {
             state: AtomicU8::new(0),
@@ -138,6 +289,7 @@ impl<T> Inner<T> {
         }
     }
 
+    #[inline]
     fn state(&self) -> u8 {
         self.state.load(Ordering::SeqCst)
     }
@@ -274,6 +426,12 @@ impl<T> Drop for Inner<T> {
 unsafe impl<T: Send> Send for Inner<T> {}
 unsafe impl<T: Sync> Sync for Inner<T> {}
 
+/// A future waiting for the [`Receiver`] of a channel to be closed.
+///
+/// `Closed` is created by [`closed`].
+///
+/// [`closed`]: Sender::closed
+#[derive(Debug)]
 pub struct Closed<'a, T> {
     tx: &'a Sender<T>,
 }
@@ -281,6 +439,7 @@ pub struct Closed<'a, T> {
 impl<'a, T> Future for Closed<'a, T> {
     type Output = ();
 
+    #[inline]
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         self.tx.inner.poll_closed(cx)
     }
