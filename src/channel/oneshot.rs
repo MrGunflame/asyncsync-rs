@@ -89,8 +89,8 @@ impl<T> Sender<T> {
     /// ```
     /// use asyncsync::channel::oneshot;
     ///
-    /// let (tx, rx) = oneshot::channel();
-    /// assert!(!tx.is_closed())
+    /// let (tx, mut rx) = oneshot::channel::<()>();
+    /// assert!(!tx.is_closed());
     ///
     /// rx.close();
     /// assert!(tx.is_closed());
@@ -109,7 +109,7 @@ impl<T> Sender<T> {
     ///
     /// #[tokio::main]
     /// async fn main() {
-    ///     let (tx, rx) = oneshot::channel();
+    ///     let (tx, mut rx) = oneshot::channel::<()>();
     ///     
     ///     tokio::task::spawn(async move {
     ///         rx.close();
@@ -186,7 +186,7 @@ impl<T> Receiver<T> {
     ///
     /// #[tokio::main]
     /// async fn main() {
-    ///     let (tx, rx) = oneshot::channel();
+    ///     let (tx, mut rx) = oneshot::channel::<()>();
     ///
     ///     tokio::task::spawn(async move {
     ///         rx.close();
@@ -215,7 +215,7 @@ impl<T> Receiver<T> {
     ///
     /// #[tokio::main]
     /// async fn main() {
-    ///     let (tx, rx) = oneshot::channel();
+    ///     let (tx, mut rx) = oneshot::channel();
     ///
     ///     assert_eq!(rx.try_recv().unwrap_err(), TryRecvError::Empty);
     ///
