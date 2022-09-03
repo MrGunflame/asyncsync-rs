@@ -43,5 +43,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v3
-    - run: rustup +nightly component add miri
+    - run: rustup toolchain install nightly --component miri
+    - run: cargo +nightly miri setup
     - run: MIRIFLAGS="-Zmiri-disable-isolation" cargo +nightly miri test --all-features
