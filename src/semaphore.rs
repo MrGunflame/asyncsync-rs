@@ -244,7 +244,6 @@ impl<'a> Future for Acquire<'a> {
                 unsafe {
                     let waiter = &mut *self.waiter.get();
                     waiter.waker = Some(cx.waker().clone());
-                    drop(waiter);
 
                     let ptr = NonNull::new_unchecked(self.waiter.get());
                     waiters.push_back(ptr);

@@ -30,7 +30,8 @@ unsafe impl Link for Waiter {
         let ptr = ptr.as_ptr();
 
         let pointers = addr_of_mut!((*ptr).pointers);
-        NonNull::new_unchecked(pointers)
+        // SAFETY: This is a positive offset from ptr.
+        unsafe { NonNull::new_unchecked(pointers) }
     }
 }
 

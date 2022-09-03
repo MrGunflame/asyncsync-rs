@@ -180,8 +180,6 @@ impl<'a> Future for Notified<'a> {
                 if waiter.notified {
                     // SAFETY: Waiterlist is locked, access to `self.writer` is exclusive.
                     unsafe {
-                        drop(waiter);
-
                         let ptr = NonNull::new_unchecked(self.waiter.get());
                         waiters.remove(ptr);
                     }

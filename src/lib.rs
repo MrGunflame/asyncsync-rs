@@ -1,5 +1,8 @@
 //! Runtime-independent synchronization primitives for asynchronous Rust.
 #![no_std]
+#![deny(unsafe_op_in_unsafe_fn)]
+#![deny(elided_lifetimes_in_paths)]
+#![deny(missing_debug_implementations)]
 
 #[cfg(any(feature = "std", test))]
 extern crate std;
