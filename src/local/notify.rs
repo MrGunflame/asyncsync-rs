@@ -2,7 +2,7 @@ use core::cell::UnsafeCell;
 use core::future::Future;
 use core::marker::PhantomData;
 use core::pin::Pin;
-use core::ptr;
+use core::ptr::{self, NonNull};
 use core::task::{Context, Poll};
 
 use futures::future::FusedFuture;
@@ -52,7 +52,6 @@ impl Notify {
 
         for waiter in waiters.iter_mut() {
             // SAFETY: No other threads have access to this field.
-            let waiter = unsafe { waiter.get() };
 
             // Set the notification and wake the waker.
             waiter.notified = true;
@@ -72,10 +71,9 @@ impl Notify {
 
         // Notify the first waiter in the list. If the list is empty
         // store a notification instead.
-        match waiters.front() {
+        match waiters.front_mut() {
             Some(waiter) => {
                 // SAFETY: No other threads have access to this field.
-                let waiter = unsafe { waiter.get() };
 
                 // Set the notification and wake the waker.
                 waiter.notified = true;
@@ -95,7 +93,7 @@ impl Notify {
         Notified {
             notify: self,
             state: State::Init,
-            waiter: Waiter::new(),
+            waiter: UnsafeCell::new(Waiter::new()),
         }
     }
 }
@@ -114,7 +112,7 @@ impl Default for Notify {
 pub struct Notified<'a> {
     notify: &'a Notify,
     state: State,
-    waiter: Waiter,
+    waiter: UnsafeCell<Waiter>,
 }
 
 impl<'a> Notified<'a> {
@@ -144,15 +142,19 @@ impl<'a> Future for Notified<'a> {
 
                 // Register the new waiter.
                 // SAFETY: The waiter is owned any not has no references.
-                let waiter = unsafe { self.waiter.get() };
+                let waiter = unsafe { &mut *self.waiter.get() };
                 waiter.waker = Some(cx.waker().clone());
 
                 // Push the new waiter.
                 // SAFETY: No other threads have access to this field. The pushed waiter
                 // has a shorter lifetime than the list.
                 unsafe {
+                    drop(waiter);
+
                     let waiters = &mut *self.notify.waiters.get();
-                    waiters.push_back((&self.waiter).into());
+
+                    let ptr = NonNull::new_unchecked(self.waiter.get());
+                    waiters.push_back(ptr);
                 }
 
                 *self.state_mut() = State::Pending;
@@ -160,14 +162,18 @@ impl<'a> Future for Notified<'a> {
             }
             State::Pending => {
                 // SAFETY: No other threads have access to the waiter.
-                let waiter = unsafe { self.waiter.get() };
+                let waiter = unsafe { &mut *self.waiter.get() };
 
                 // Check if a notification was received.
                 if waiter.notified {
                     // Remove the waiter.
                     unsafe {
+                        drop(waiter);
+
                         let waiters = &mut *self.notify.waiters.get();
-                        waiters.remove((&self.waiter).into());
+
+                        let ptr = NonNull::new_unchecked(self.waiter.get());
+                        waiters.remove(ptr);
                     }
 
                     *self.state_mut() = State::Done;
@@ -199,7 +205,7 @@ impl<'a> Drop for Notified<'a> {
             unsafe {
                 let waiters = &mut *self.notify.waiters.get();
 
-                waiters.remove((&self.waiter).into());
+                waiters.remove(NonNull::new_unchecked(self.waiter.get()));
             }
         }
     }

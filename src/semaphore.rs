@@ -1,6 +1,8 @@
+use core::cell::UnsafeCell;
 use core::future::Future;
 use core::mem;
 use core::pin::Pin;
+use core::ptr::NonNull;
 use core::sync::atomic::{AtomicUsize, Ordering};
 use core::task::{Context, Poll};
 
@@ -88,8 +90,6 @@ impl Semaphore {
         let mut waiters = self.waiters.lock().unwrap();
         let iter = waiters.iter_mut();
         for waiter in iter {
-            let waiter = unsafe { waiter.get() };
-
             if permits < waiter.permits {
                 break;
             }
@@ -139,7 +139,7 @@ impl Semaphore {
     pub fn acquire_many(&self, n: usize) -> Acquire<'_> {
         Acquire {
             semaphore: self,
-            waiter: Waiter::new(n),
+            waiter: UnsafeCell::new(Waiter::new(n)),
             state: State::Init(n),
         }
     }
@@ -200,7 +200,7 @@ unsafe impl Sync for Semaphore {}
 #[derive(Debug)]
 pub struct Acquire<'a> {
     semaphore: &'a Semaphore,
-    waiter: Waiter,
+    waiter: UnsafeCell<Waiter>,
     state: State,
 }
 
@@ -242,8 +242,12 @@ impl<'a> Future for Acquire<'a> {
 
                 // Register new waiter
                 unsafe {
-                    self.waiter.get().waker = Some(cx.waker().clone());
-                    waiters.push_back((&self.waiter).into());
+                    let waiter = &mut *self.waiter.get();
+                    waiter.waker = Some(cx.waker().clone());
+                    drop(waiter);
+
+                    let ptr = NonNull::new_unchecked(self.waiter.get());
+                    waiters.push_back(ptr);
                 }
 
                 drop(waiters);
@@ -254,7 +258,7 @@ impl<'a> Future for Acquire<'a> {
             State::Waiting(n) => {
                 let mut waiters = self.semaphore.waiters.lock().unwrap();
 
-                let waiter = unsafe { self.waiter.get() };
+                let waiter = unsafe { &mut *self.waiter.get() };
 
                 let res = self.semaphore.permits.fetch_update(
                     Ordering::SeqCst,
@@ -265,7 +269,8 @@ impl<'a> Future for Acquire<'a> {
                 if res.is_ok() {
                     // Remove the waiter.
                     unsafe {
-                        waiters.remove((&self.waiter).into());
+                        let ptr = NonNull::new_unchecked(self.waiter.get());
+                        waiters.remove(ptr);
                     }
 
                     *self.as_mut().state_mut() = State::Done;
@@ -305,7 +310,8 @@ impl<'a> Drop for Acquire<'a> {
             let mut waiters = self.semaphore.waiters.lock().unwrap();
 
             unsafe {
-                waiters.remove((&self.waiter).into());
+                let ptr = NonNull::new_unchecked(self.waiter.get());
+                waiters.remove(ptr);
             }
         }
     }

@@ -1,59 +1,37 @@
-use core::{cell::UnsafeCell, marker::PhantomPinned, ptr::NonNull, task::Waker};
+use core::marker::PhantomPinned;
+use core::ptr::{addr_of_mut, NonNull};
+use core::task::Waker;
 
-use crate::linked_list::Link;
+use crate::linked_list::{Link, Pointers};
 
 #[derive(Debug)]
-pub struct Waiter(UnsafeCell<WaiterInner>);
+pub struct Waiter {
+    pub waker: Option<Waker>,
+    pub notified: bool,
+
+    pointers: Pointers<Self>,
+
+    _pin: PhantomPinned,
+}
 
 impl Waiter {
     pub fn new() -> Self {
-        Self(UnsafeCell::new(WaiterInner {
+        Self {
             waker: None,
             notified: false,
+            pointers: Pointers::new(),
             _pin: PhantomPinned,
-            next: None,
-            prev: None,
-        }))
-    }
-
-    /// Returns a mutable reference to the contained [`WaiterInner`].
-    ///
-    /// # Safety
-    ///
-    /// The [`Waiter`] must be accessed from multiple threads at the same time.
-    #[allow(clippy::mut_from_ref)]
-    pub unsafe fn get(&self) -> &mut WaiterInner {
-        &mut *self.0.get()
+        }
     }
 }
 
 unsafe impl Link for Waiter {
-    fn next(&self) -> Option<NonNull<Self>> {
-        unsafe { self.get().next }
+    unsafe fn pointers(ptr: NonNull<Self>) -> NonNull<Pointers<Self>> {
+        let ptr = ptr.as_ptr();
+
+        let pointers = addr_of_mut!((*ptr).pointers);
+        NonNull::new_unchecked(pointers)
     }
-
-    fn prev(&self) -> Option<NonNull<Self>> {
-        unsafe { self.get().prev }
-    }
-
-    fn next_mut(&mut self) -> &mut Option<NonNull<Self>> {
-        unsafe { &mut self.get().next }
-    }
-
-    fn prev_mut(&mut self) -> &mut Option<NonNull<Self>> {
-        unsafe { &mut self.get().prev }
-    }
-}
-
-#[derive(Debug)]
-pub struct WaiterInner {
-    pub waker: Option<Waker>,
-    pub notified: bool,
-
-    _pin: PhantomPinned,
-
-    next: Option<NonNull<Waiter>>,
-    prev: Option<NonNull<Waiter>>,
 }
 
 #[derive(Debug, PartialEq, Eq)]

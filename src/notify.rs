@@ -1,5 +1,7 @@
+use core::cell::UnsafeCell;
 use core::future::Future;
 use core::pin::Pin;
+use core::ptr::NonNull;
 use core::sync::atomic::{AtomicUsize, Ordering};
 use core::task::{Context, Poll};
 
@@ -63,8 +65,6 @@ impl Notify {
         let mut waiters = self.waiters.lock();
 
         for waiter in waiters.iter_mut() {
-            let waiter = unsafe { waiter.get() };
-
             waiter.notified = true;
 
             if let Some(waker) = &waiter.waker {
@@ -78,13 +78,11 @@ impl Notify {
     /// If there are no task waiting, a notification is stored and the next waiting task will
     /// complete immediately.
     pub fn notify_one(&self) {
-        let waiters = self.waiters.lock();
+        let mut waiters = self.waiters.lock();
 
         #[allow(clippy::significant_drop_in_scrutinee)]
-        match waiters.front() {
+        match waiters.front_mut() {
             Some(waiter) => {
-                let waiter = unsafe { waiter.get() };
-
                 waiter.notified = true;
                 if let Some(waker) = &waiter.waker {
                     waker.wake_by_ref();
@@ -99,7 +97,7 @@ impl Notify {
         Notified {
             notify: self,
             state: State::Init,
-            waiter: Waiter::new(),
+            waiter: UnsafeCell::new(Waiter::new()),
         }
     }
 }
@@ -122,7 +120,7 @@ pub struct Notified<'a> {
 
     /// Pointer to the wait list of `self.notify`. Lock the mutex before accessing. Only
     /// inside the waiterlist if state == State::Pending.
-    waiter: Waiter,
+    waiter: UnsafeCell<Waiter>,
 }
 
 impl<'a> Notified<'a> {
@@ -157,9 +155,15 @@ impl<'a> Future for Notified<'a> {
 
                 // SAFETY: waiterlist is locked, access to `self.writer` is exclusive.
                 unsafe {
-                    self.waiter.get().waker = Some(cx.waker().clone());
+                    let waiter = &mut *self.waiter.get();
+                    waiter.waker = Some(cx.waker().clone());
+                }
 
-                    waiters.push_back((&self.waiter).into());
+                unsafe {
+                    // SAFETY: UnsafeCell::get never returns a null pointer.
+                    let ptr = NonNull::new_unchecked(self.waiter.get());
+
+                    waiters.push_back(ptr);
                 }
 
                 drop(waiters);
@@ -170,12 +174,16 @@ impl<'a> Future for Notified<'a> {
             State::Pending => {
                 let mut waiters = self.notify.waiters.lock();
 
-                let waiter = unsafe { self.waiter.get() };
+                // SAFETY: Waiterlist is locked.
+                let waiter = unsafe { &mut *self.waiter.get() };
 
                 if waiter.notified {
                     // SAFETY: Waiterlist is locked, access to `self.writer` is exclusive.
                     unsafe {
-                        waiters.remove((&self.waiter).into());
+                        drop(waiter);
+
+                        let ptr = NonNull::new_unchecked(self.waiter.get());
+                        waiters.remove(ptr);
                     }
 
                     *self.state_mut() = State::Done;
@@ -209,7 +217,9 @@ impl<'a> Drop for Notified<'a> {
 
             // SAFETY: `self.waiter` is a valid pointer in the waiterlist.
             unsafe {
-                waiters.remove((&self.waiter).into());
+                let ptr = NonNull::new_unchecked(self.waiter.get());
+
+                waiters.remove(ptr);
             }
         }
     }

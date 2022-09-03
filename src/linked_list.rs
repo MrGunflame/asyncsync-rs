@@ -1,3 +1,4 @@
+use core::cell::UnsafeCell;
 use core::marker::PhantomData;
 use core::ptr::NonNull;
 
@@ -23,11 +24,69 @@ where
 /// Implementations of `Link` must be pinned in memory. When a node is inserted it must not be
 /// moved until is was removed again.
 pub(crate) unsafe trait Link {
-    fn next(&self) -> Option<NonNull<Self>>;
-    fn prev(&self) -> Option<NonNull<Self>>;
+    unsafe fn pointers(ptr: NonNull<Self>) -> NonNull<Pointers<Self>>;
+}
 
-    fn next_mut(&mut self) -> &mut Option<NonNull<Self>>;
-    fn prev_mut(&mut self) -> &mut Option<NonNull<Self>>;
+#[derive(Debug)]
+pub struct Pointers<T>
+where
+    T: ?Sized,
+{
+    inner: UnsafeCell<PointersInner<T>>,
+}
+
+#[derive(Debug)]
+pub struct PointersInner<T>
+where
+    T: ?Sized,
+{
+    next: Option<NonNull<T>>,
+    prev: Option<NonNull<T>>,
+}
+
+impl<T> Pointers<T> {
+    pub fn new() -> Self {
+        Self {
+            inner: UnsafeCell::new(PointersInner {
+                next: None,
+                prev: None,
+            }),
+        }
+    }
+
+    fn next(&self) -> Option<NonNull<T>> {
+        unsafe {
+            let inner = &*self.inner.get();
+            inner.next
+        }
+    }
+
+    fn prev(&self) -> Option<NonNull<T>> {
+        unsafe {
+            let inner = &*self.inner.get();
+            inner.prev
+        }
+    }
+
+    fn set_next(&mut self, value: Option<NonNull<T>>) {
+        unsafe {
+            let inner = &mut *self.inner.get();
+            inner.next = value;
+        }
+    }
+
+    fn set_prev(&mut self, value: Option<NonNull<T>>) {
+        unsafe {
+            let inner = &mut *self.inner.get();
+            inner.prev = value;
+        }
+    }
+}
+
+impl<T> Default for Pointers<T> {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl<T> LinkedList<T>
@@ -55,14 +114,16 @@ where
     /// dropped. Dropping the element before removing it from the list is undefined behavoir.
     #[allow(unused)]
     pub unsafe fn push_front(&mut self, ptr: NonNull<T>) {
-        let node = &mut *ptr.as_ptr();
+        let pointers = unsafe { T::pointers(ptr).as_mut() };
 
-        *node.next_mut() = self.head;
-        *node.prev_mut() = None;
+        pointers.set_next(self.head);
+        pointers.set_prev(None);
 
         match self.head {
             None => self.tail = Some(ptr),
-            Some(head) => *(*head.as_ptr()).prev_mut() = Some(ptr),
+            Some(head) => unsafe {
+                T::pointers(head).as_mut().set_prev(Some(ptr));
+            },
         }
 
         self.head = Some(ptr);
@@ -83,14 +144,16 @@ where
     /// The pushed element must live as long as the linked list, or be remove before it is
     /// dropped. Dropping the element before removing it from the list undefined behavoir.
     pub unsafe fn push_back(&mut self, ptr: NonNull<T>) {
-        let node = &mut *ptr.as_ptr();
+        let pointers = unsafe { T::pointers(ptr).as_mut() };
 
-        *node.next_mut() = None;
-        *node.prev_mut() = self.tail;
+        pointers.set_next(None);
+        pointers.set_prev(self.tail);
 
         match self.tail {
             None => self.head = Some(ptr),
-            Some(tail) => *(*tail.as_ptr()).next_mut() = Some(ptr),
+            Some(tail) => unsafe {
+                T::pointers(tail).as_mut().set_next(Some(ptr));
+            },
         }
 
         self.tail = Some(ptr);
@@ -116,16 +179,20 @@ where
             self.len -= 1;
         }
 
-        let node = &mut *ptr.as_ptr();
+        let pointers = unsafe { T::pointers(ptr).as_mut() };
 
-        match node.next() {
-            Some(next) => *(*next.as_ptr()).prev_mut() = node.prev(),
-            None => self.tail = node.prev(),
+        match pointers.next() {
+            Some(next) => unsafe {
+                T::pointers(next).as_mut().set_prev(pointers.prev());
+            },
+            None => self.tail = pointers.prev(),
         }
 
-        match node.prev() {
-            Some(prev) => *(*prev.as_ptr()).next_mut() = node.next(),
-            None => self.head = node.next(),
+        match pointers.prev() {
+            Some(prev) => unsafe {
+                T::pointers(prev).as_mut().set_next(pointers.next());
+            },
+            None => self.head = pointers.next(),
         }
     }
 
@@ -153,8 +220,8 @@ where
     }
 
     #[inline]
-    pub fn front(&self) -> Option<&T> {
-        unsafe { self.head.map(|ptr| &*ptr.as_ptr()) }
+    pub fn front_mut(&mut self) -> Option<&mut T> {
+        unsafe { self.head.map(|ptr| &mut *ptr.as_ptr()) }
     }
 }
 
@@ -222,9 +289,9 @@ where
         let head = self.head?;
 
         unsafe {
-            let node = &mut *head.as_ptr();
-            self.head = node.next();
-            Some(node)
+            let pointers = T::pointers(head).as_mut();
+            self.head = pointers.next();
+            Some(&mut *(head.as_ptr()))
         }
     }
 }
@@ -232,43 +299,28 @@ where
 #[cfg(test)]
 mod tests {
     use std::mem;
-    use std::{cell::UnsafeCell, ops::Deref, ptr::NonNull};
+    use std::ptr::NonNull;
 
-    use super::{Link, LinkedList};
+    use super::{Link, LinkedList, Pointers};
 
     #[derive(Debug, Default)]
-    struct Node(UnsafeCell<NodeInner>);
+    #[repr(transparent)]
+    struct Node(Pointers<Self>);
 
-    unsafe impl Link for Node {
+    impl Node {
         fn next(&self) -> Option<NonNull<Self>> {
-            unsafe { (*self.0.get()).next }
+            self.0.next()
         }
 
         fn prev(&self) -> Option<NonNull<Self>> {
-            unsafe { (*self.0.get()).prev }
-        }
-
-        fn next_mut(&mut self) -> &mut Option<NonNull<Self>> {
-            unsafe { &mut (*self.0.get()).next }
-        }
-
-        fn prev_mut(&mut self) -> &mut Option<NonNull<Self>> {
-            unsafe { &mut (*self.0.get()).prev }
+            self.0.prev()
         }
     }
 
-    impl Deref for Node {
-        type Target = NodeInner;
-
-        fn deref(&self) -> &Self::Target {
-            unsafe { &*self.0.get() }
+    unsafe impl Link for Node {
+        unsafe fn pointers(ptr: NonNull<Self>) -> NonNull<Pointers<Self>> {
+            ptr.cast()
         }
-    }
-
-    #[derive(Clone, Debug, Default)]
-    struct NodeInner {
-        next: Option<NonNull<Node>>,
-        prev: Option<NonNull<Node>>,
     }
 
     #[test]
@@ -283,8 +335,8 @@ mod tests {
         assert_eq!(list.head, Some((&node).into()));
         assert_eq!(list.tail, Some((&node).into()));
 
-        assert_eq!(node.next, None);
-        assert_eq!(node.prev, None);
+        assert_eq!(node.next(), None);
+        assert_eq!(node.prev(), None);
 
         let node2 = Node::default();
         unsafe {
@@ -294,11 +346,11 @@ mod tests {
         assert_eq!(list.head, Some((&node2).into()));
         assert_eq!(list.tail, Some((&node).into()));
 
-        assert_eq!(node.next, None);
-        assert_eq!(node.prev, Some((&node2).into()));
+        assert_eq!(node.next(), None);
+        assert_eq!(node.prev(), Some((&node2).into()));
 
-        assert_eq!(node2.next, Some((&node).into()));
-        assert_eq!(node2.prev, None);
+        assert_eq!(node2.next(), Some((&node).into()));
+        assert_eq!(node2.prev(), None);
 
         let node3 = Node::default();
         unsafe {
@@ -308,14 +360,14 @@ mod tests {
         assert_eq!(list.head, Some((&node3).into()));
         assert_eq!(list.tail, Some((&node).into()));
 
-        assert_eq!(node.next, None);
-        assert_eq!(node.prev, Some((&node2).into()));
+        assert_eq!(node.next(), None);
+        assert_eq!(node.prev(), Some((&node2).into()));
 
-        assert_eq!(node2.next, Some((&node).into()));
-        assert_eq!(node2.prev, Some((&node3).into()));
+        assert_eq!(node2.next(), Some((&node).into()));
+        assert_eq!(node2.prev(), Some((&node3).into()));
 
-        assert_eq!(node3.next, Some((&node2).into()));
-        assert_eq!(node3.prev, None);
+        assert_eq!(node3.next(), Some((&node2).into()));
+        assert_eq!(node3.prev(), None);
 
         // Destroy the list without asserting that it is empty.
         mem::forget(list);
@@ -333,8 +385,8 @@ mod tests {
         assert_eq!(list.head, Some((&node).into()));
         assert_eq!(list.tail, Some((&node).into()));
 
-        assert_eq!(node.next, None);
-        assert_eq!(node.prev, None);
+        assert_eq!(node.next(), None);
+        assert_eq!(node.prev(), None);
 
         let node2 = Node::default();
         unsafe {
@@ -344,11 +396,11 @@ mod tests {
         assert_eq!(list.head, Some((&node).into()));
         assert_eq!(list.tail, Some((&node2).into()));
 
-        assert_eq!(node.next, Some((&node2).into()));
-        assert_eq!(node.prev, None);
+        assert_eq!(node.next(), Some((&node2).into()));
+        assert_eq!(node.prev(), None);
 
-        assert_eq!(node2.next, None);
-        assert_eq!(node2.prev, Some((&node).into()));
+        assert_eq!(node2.next(), None);
+        assert_eq!(node2.prev(), Some((&node).into()));
 
         let node3 = Node::default();
         unsafe {
@@ -358,14 +410,14 @@ mod tests {
         assert_eq!(list.head, Some((&node).into()));
         assert_eq!(list.tail, Some((&node3).into()));
 
-        assert_eq!(node.next, Some((&node2).into()));
-        assert_eq!(node.prev, None);
+        assert_eq!(node.next(), Some((&node2).into()));
+        assert_eq!(node.prev(), None);
 
-        assert_eq!(node2.next, Some((&node3).into()));
-        assert_eq!(node2.prev, Some((&node).into()));
+        assert_eq!(node2.next(), Some((&node3).into()));
+        assert_eq!(node2.prev(), Some((&node).into()));
 
-        assert_eq!(node3.next, None);
-        assert_eq!(node3.prev, Some((&node2).into()));
+        assert_eq!(node3.next(), None);
+        assert_eq!(node3.prev(), Some((&node2).into()));
 
         // Destroy the list without asserting that it is empty.
         mem::forget(list);
@@ -389,11 +441,11 @@ mod tests {
         assert_eq!(list.head, Some((&node2).into()));
         assert_eq!(list.tail, Some((&node3).into()));
 
-        assert_eq!(node2.next, Some((&node3).into()));
-        assert_eq!(node2.prev, None);
+        assert_eq!(node2.next(), Some((&node3).into()));
+        assert_eq!(node2.prev(), None);
 
-        assert_eq!(node3.next, None);
-        assert_eq!(node3.prev, Some((&node2).into()));
+        assert_eq!(node3.next(), None);
+        assert_eq!(node3.prev(), Some((&node2).into()));
 
         // Destroy the list without asserting that it is empty.
         mem::forget(list);
@@ -410,11 +462,11 @@ mod tests {
         assert_eq!(list.head, Some((&node).into()));
         assert_eq!(list.tail, Some((&node2).into()));
 
-        assert_eq!(node.next, Some((&node2).into()));
-        assert_eq!(node.prev, None);
+        assert_eq!(node.next(), Some((&node2).into()));
+        assert_eq!(node.prev(), None);
 
-        assert_eq!(node2.next, None);
-        assert_eq!(node2.prev, Some((&node).into()));
+        assert_eq!(node2.next(), None);
+        assert_eq!(node2.prev(), Some((&node).into()));
 
         // Destroy the list without asserting that it is empty.
         mem::forget(list);
@@ -431,11 +483,11 @@ mod tests {
         assert_eq!(list.head, Some((&node).into()));
         assert_eq!(list.tail, Some((&node3).into()));
 
-        assert_eq!(node.next, Some((&node3).into()));
-        assert_eq!(node.prev, None);
+        assert_eq!(node.next(), Some((&node3).into()));
+        assert_eq!(node.prev(), None);
 
-        assert_eq!(node3.next, None);
-        assert_eq!(node3.prev, Some((&node).into()));
+        assert_eq!(node3.next(), None);
+        assert_eq!(node3.prev(), Some((&node).into()));
 
         // Destroy the list without asserting that it is empty.
         mem::forget(list);
