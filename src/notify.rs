@@ -140,6 +140,9 @@ impl<'a> Future for Notified<'a> {
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         match self.state {
             State::Init => {
+                // Lock waiters mutex before accessing `self.waiter`.
+                let mut waiters = self.notify.waiters.lock();
+
                 let res =
                     self.notify
                         .state
@@ -149,9 +152,6 @@ impl<'a> Future for Notified<'a> {
                     *self.state_mut() = State::Done;
                     return Poll::Ready(());
                 }
-
-                // Lock waiters mutex before accessing `self.waiter`.
-                let mut waiters = self.notify.waiters.lock();
 
                 // SAFETY: waiterlist is locked, access to `self.writer` is exclusive.
                 unsafe {
@@ -277,12 +277,13 @@ mod tests {
         let notify = Arc::new(Notify::new());
 
         let handle = notify.clone();
-        tokio::task::spawn(async move {
+        let task = tokio::task::spawn(async move {
             handle.notified().await;
         });
 
-        tokio::time::sleep(Duration::new(1, 0)).await;
+        // tokio::time::sleep(Duration::new(1, 0)).await;
         notify.notify_one();
+        let _ = task.await;
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
