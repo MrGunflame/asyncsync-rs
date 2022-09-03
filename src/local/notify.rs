@@ -149,8 +149,6 @@ impl<'a> Future for Notified<'a> {
                 // SAFETY: No other threads have access to this field. The pushed waiter
                 // has a shorter lifetime than the list.
                 unsafe {
-                    drop(waiter);
-
                     let waiters = &mut *self.notify.waiters.get();
 
                     let ptr = NonNull::new_unchecked(self.waiter.get());
@@ -168,8 +166,6 @@ impl<'a> Future for Notified<'a> {
                 if waiter.notified {
                     // Remove the waiter.
                     unsafe {
-                        drop(waiter);
-
                         let waiters = &mut *self.notify.waiters.get();
 
                         let ptr = NonNull::new_unchecked(self.waiter.get());
