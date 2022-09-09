@@ -256,24 +256,27 @@ impl<T> Drop for Inner<T> {
 
         // Manually drop the contained value.
         if state.has_value() {
+            // SAFETY: The `STATE_HAS_VALUE` bit indicates that the value
+            // is initialized.
             unsafe {
-                let value = &mut *self.value.get();
-                value.assume_init_drop();
+                self.value.get_mut().assume_init_drop();
             }
         }
 
         // Drop the wakers if initialized.
         if state.is_tx_waker_init() {
+            // SAFETY: The `STATE_TX_WAKER_INIT` bit indicates that the waker
+            // is initialized.
             unsafe {
-                let value = &mut *self.tx_waker.get();
-                value.assume_init_drop();
+                self.tx_waker.get_mut().assume_init_drop();
             }
         }
 
         if state.is_rx_waker_init() {
+            // SAFETY: The `STATE_RX_WAKER_INIt` bit indicates that the waker
+            // is initialized.
             unsafe {
-                let value = &mut *self.rx_waker.get();
-                value.assume_init_drop();
+                self.rx_waker.get_mut().assume_init_drop();
             }
         }
     }

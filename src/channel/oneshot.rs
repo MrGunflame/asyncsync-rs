@@ -419,9 +419,10 @@ impl<T> Drop for Inner<T> {
 
         // Drop the value when it wasn't read.
         if state & STATE_HAS_VALUE != 0 {
+            // SAFETY: The `STATE_HAS_VALUE` bit indicates that the value
+            // is initialized.
             unsafe {
-                let value = &mut *self.value.get();
-                value.assume_init_drop();
+                self.value.get_mut().assume_init_drop();
             }
         }
     }
