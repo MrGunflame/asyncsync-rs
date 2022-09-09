@@ -126,7 +126,7 @@ impl<T> Inner<T> {
     /// This method is only safe to call when there are no other references the state.
     #[allow(clippy::mut_from_ref)]
     unsafe fn state(&self) -> &mut State {
-        &mut *self.state.get()
+        unsafe { &mut *self.state.get() }
     }
 
     fn is_rx_closed(&self) -> bool {
@@ -243,8 +243,10 @@ impl<T> Inner<T> {
     }
 
     unsafe fn read_value(&self) -> T {
-        let value = &*self.value.get();
-        value.assume_init_read()
+        unsafe {
+            let value = &*self.value.get();
+            value.assume_init_read()
+        }
     }
 }
 
@@ -348,6 +350,7 @@ impl State {
     }
 }
 
+#[derive(Debug)]
 pub struct Closed<'a, T> {
     tx: &'a Sender<T>,
 }

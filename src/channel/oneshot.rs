@@ -402,10 +402,14 @@ impl<T> Inner<T> {
     ///
     /// This method is only safe to call when the value has been written successfully and the state
     /// has set the STATE_WRITTEN bit. It is only safe to call ONCE.
+    #[inline]
     unsafe fn read_value(&self) -> T {
-        let value = &mut *self.value.get();
-
-        value.assume_init_read()
+        // SAFETY: The caller must guarantee that `self.value` has been initialized
+        // and does not have any active references.
+        unsafe {
+            let val = &mut *self.value.get();
+            val.assume_init_read()
+        }
     }
 }
 
