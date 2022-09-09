@@ -11,7 +11,8 @@ publish = true
 
 [features]
 default = ["std"]
-std = []
+std = ["alloc"]
+alloc = []
 local = []
 
 [dependencies]

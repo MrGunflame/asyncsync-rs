@@ -18,9 +18,7 @@ See [docs.rs](https://docs.rs/asyncsync) for details about specific types.
 ## Features
 
 `std`: Enables usage of std. This is currently required for the default `Send` primitives. Enabled by default.  
-`local`: Enables the optional [local module](https://docs.rs/asyncsync/latest/local), providing `!Send` primitives for a single-threaded context.
-
-## no_std support
+`local`: Enables the optional [local module](https://docs.rs/asyncsync/latest/asyncsync/local), providing `!Send` primitives for a single-threaded context.
 
 ## License
 
