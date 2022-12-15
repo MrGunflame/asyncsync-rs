@@ -10,7 +10,6 @@ extern crate alloc;
 #[cfg(any(feature = "std", test))]
 extern crate std;
 
-mod buffer;
 mod linked_list;
 pub(crate) mod utils;
 
